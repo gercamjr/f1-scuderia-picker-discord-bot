@@ -53,6 +53,14 @@ def save_user_pick(user_id, ea_username, team, driver):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Check if the driver is already selected by another user
+    cursor.execute('SELECT user_id FROM user_picks WHERE driver = ? AND user_id != ?', (driver, user_id))
+    existing_pick = cursor.fetchone()
+    
+    if existing_pick:
+        conn.close()
+        return False  # Driver already taken by another user
+    
     cursor.execute('''
         INSERT OR REPLACE INTO user_picks (user_id, ea_username, team, driver, updated_at)
         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -60,19 +68,20 @@ def save_user_pick(user_id, ea_username, team, driver):
     
     conn.commit()
     conn.close()
+    return True  # Successfully saved
 
 def get_user_pick(user_id):
     """Retrieve a user's pick from the database."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute('SELECT ea_username, team, driver FROM user_picks WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT team, driver, ea_username FROM user_picks WHERE user_id = ?', (user_id,))
     result = cursor.fetchone()
     
     conn.close()
     
     if result:
-        return {'ea_username': result[0], 'team': result[1], 'driver': result[2]}
+        return {'team': result[0], 'driver': result[1], 'ea_username': result[2]}
     return None
 
 def get_all_picks():
@@ -80,16 +89,28 @@ def get_all_picks():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute('SELECT user_id, ea_username, team, driver FROM user_picks ORDER BY updated_at DESC')
+    cursor.execute('SELECT user_id, team, driver, ea_username FROM user_picks ORDER BY updated_at DESC')
     results = cursor.fetchall()
     
     conn.close()
     
     picks = {}
-    for user_id, ea_username, team, driver in results:
+    for user_id, team, driver, ea_username in results:
         picks[user_id] = {'ea_username': ea_username, 'team': team, 'driver': driver}
     
     return picks
+
+def get_selected_drivers():
+    """Retrieve all currently selected drivers from the database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT driver FROM user_picks')
+    results = cursor.fetchall()
+    
+    conn.close()
+    
+    return {driver[0] for driver in results}  # Return a set of selected drivers
 
 # Set up the bot with necessary intents
 intents = discord.Intents.default()
@@ -174,10 +195,22 @@ class EAUsernameModal(ui.Modal, title='Enter Your EA Username'):
             )
             return
         
+        # Check if there are any available drivers left
+        selected_drivers = get_selected_drivers()
+        total_drivers = sum(len(team.get('drivers', [])) for team in F1_TEAMS)
+        available_count = total_drivers - len(selected_drivers)
+        
+        if available_count == 0:
+            await interaction.response.send_message(
+                "All drivers have been selected while you were filling out the form! 🏁\nUse `/available` to see which drivers are taken or `/leaderboard` to see all picks.",
+                ephemeral=True
+            )
+            return
+        
         # Store the EA username in the view and proceed to team selection
         team_view = TeamSelectView(str(self.ea_username.value))
         await interaction.response.send_message(
-            f'Thanks **{self.ea_username.value}**! Now please select your favorite F1 team:',
+            f'Thanks **{self.ea_username.value}**! Now please select your favorite F1 team:\n*({available_count} driver{"s" if available_count != 1 else ""} still available)*',
             view=team_view,
             ephemeral=True
         )
@@ -197,22 +230,36 @@ class TeamSelectView(ui.View):
             self.team_select_callback.disabled = True
             return
 
+        # Get currently selected drivers to check which teams have available drivers
+        selected_drivers = get_selected_drivers()
+
         # Create team options from F1_TEAMS data, ensuring unique team names
+        # and showing only teams with available drivers
         seen_teams = set()
         team_options = []
         for team in F1_TEAMS:
             name = team.get('name')
             if name and name not in seen_teams:  # Ensure team has a name and is unique
-                team_options.append(discord.SelectOption(label=name, value=name))
-                seen_teams.add(name)
+                # Check if team has any available drivers
+                available_drivers = [driver for driver in team.get('drivers', []) if driver not in selected_drivers]
+                if available_drivers:  # Only show teams with available drivers
+                    driver_count = len(available_drivers)
+                    description = f"{driver_count} driver{'s' if driver_count != 1 else ''} available"
+                    team_options.append(discord.SelectOption(
+                        label=name, 
+                        value=name,
+                        description=description
+                    ))
+                    seen_teams.add(name)
+        
         # Only add the select if we have valid options
         if team_options:
             self.team_select_callback.options = team_options
         else:
             # Fallback if no valid team options
-            error_options = [discord.SelectOption(label='No teams available', description='Please try again later.', value='error')]
+            error_options = [discord.SelectOption(label='No teams available', description='All drivers have been selected', value='error')]
             self.team_select_callback.options = error_options
-            self.team_select_callback.placeholder = 'No teams available...'
+            self.team_select_callback.placeholder = 'All drivers taken...'
             self.team_select_callback.disabled = True
 
     @ui.select(placeholder='Choose your favorite F1 team...', custom_id='team_select')
@@ -222,7 +269,7 @@ class TeamSelectView(ui.View):
         # Handle error case
         if selected_value == 'error':
             await interaction.response.send_message(
-                'F1 data is currently unavailable. Please try again later.',
+                'No teams have available drivers. All drivers have been selected by other users.',
                 ephemeral=True
             )
             self.stop()
@@ -251,11 +298,15 @@ class DriverSelectView(ui.View):
         self.ea_username = ea_username
         self.team_name = team_name
 
+        # Get currently selected drivers to filter them out
+        selected_drivers = get_selected_drivers()
+
         # Create driver options with proper validation, ensuring unique driver names
+        # and filtering out already selected drivers
         seen_drivers = set()
         driver_options = []
         for driver in drivers:
-            if driver and driver not in seen_drivers:  # Ensure driver name is not empty and unique
+            if (driver and driver not in seen_drivers and driver not in selected_drivers):
                 driver_options.append(discord.SelectOption(label=driver, value=driver))
                 seen_drivers.add(driver)
         
@@ -264,9 +315,9 @@ class DriverSelectView(ui.View):
             self.driver_select_callback.options = driver_options
         else:
             # Fallback if no valid driver options
-            error_options = [discord.SelectOption(label='No drivers available', description='Please try again later.', value='error')]
+            error_options = [discord.SelectOption(label='No available drivers', description='All drivers from this team are taken', value='error')]
             self.driver_select_callback.options = error_options
-            self.driver_select_callback.placeholder = 'No drivers available...'
+            self.driver_select_callback.placeholder = 'No available drivers...'
             self.driver_select_callback.disabled = True
 
     @ui.select(placeholder='Choose your favorite driver...', custom_id='driver_select')
@@ -276,21 +327,30 @@ class DriverSelectView(ui.View):
         # Handle error case
         if selected_value == 'error':
             await interaction.response.send_message(
-                'Driver data is currently unavailable. Please try again later.',
+                'No available drivers for this team. All drivers may already be selected by other users.',
                 ephemeral=True
             )
             self.stop()
             return
             
         driver = selected_value
-        save_user_pick(interaction.user.id, self.ea_username, self.team_name, driver)
-        await interaction.response.edit_message(
-            content=f'**Successfully saved your pick!**\n'
-            f'**EA Username:** {self.ea_username}\n'
-            f'**Team:** {self.team_name}\n'
-            f'**Driver:** {driver}',
-            view=None
-        )
+        
+        # Attempt to save the pick - this will fail if the driver was just selected by someone else
+        success = save_user_pick(interaction.user.id, self.ea_username, self.team_name, driver)
+        
+        if success:
+            await interaction.response.edit_message(
+                content=f'**Successfully saved your pick!**\n'
+                f'**EA Username:** {self.ea_username}\n'
+                f'**Team:** {self.team_name}\n'
+                f'**Driver:** {driver}',
+                view=None
+            )
+        else:
+            await interaction.response.edit_message(
+                content=f'**Sorry!** The driver **{driver}** was just selected by another user. Please try selecting a different driver or team.',
+                view=None
+            )
         self.stop()
 
 # Bot ready event
@@ -313,6 +373,18 @@ async def pick(interaction: Interaction):
     if not F1_TEAMS:
         await interaction.response.send_message(
             "F1 data is not currently available. Please try again in a few moments.",
+            ephemeral=True
+        )
+        return
+    
+    # Check if there are any available drivers left
+    selected_drivers = get_selected_drivers()
+    total_drivers = sum(len(team.get('drivers', [])) for team in F1_TEAMS)
+    available_count = total_drivers - len(selected_drivers)
+    
+    if available_count == 0:
+        await interaction.response.send_message(
+            "All drivers have been selected! 🏁\nUse `/available` to see which drivers are taken or `/leaderboard` to see all picks.",
             ephemeral=True
         )
         return
@@ -360,6 +432,43 @@ async def leaderboard(interaction: Interaction):
         description=leaderboard_str,
         color=discord.Color.red()
     )
+    await interaction.response.send_message(embed=embed)
+
+# The slash command to view available drivers
+@bot.tree.command(name="available", description="View all available drivers that haven't been selected yet.")
+async def available_drivers(interaction: Interaction):
+    if not F1_TEAMS:
+        await interaction.response.send_message(
+            "F1 data is not currently available. Please try again in a few moments.",
+            ephemeral=True
+        )
+        return
+
+    selected_drivers = get_selected_drivers()
+    available_str = ""
+    total_available = 0
+
+    for team in F1_TEAMS:
+        team_name = team.get('name', 'Unknown Team')
+        available_team_drivers = [driver for driver in team.get('drivers', []) if driver not in selected_drivers]
+        
+        if available_team_drivers:
+            available_str += f"**{team_name}:** {', '.join(available_team_drivers)}\n"
+            total_available += len(available_team_drivers)
+
+    if total_available == 0:
+        embed = discord.Embed(
+            title="Available Drivers",
+            description="All drivers have been selected! 🏁",
+            color=discord.Color.red()
+        )
+    else:
+        embed = discord.Embed(
+            title=f"Available Drivers ({total_available} remaining)",
+            description=available_str,
+            color=discord.Color.green()
+        )
+    
     await interaction.response.send_message(embed=embed)
 
 # Run the bot
