@@ -1,30 +1,70 @@
 # F1 Scuderia Picker Bot - Makefile for Development Tasks
 
-.PHONY: help test test-quick test-full lint format setup clean install run
+.PHONY: help test test-quick test-full lint format setup clean install run pre-commit ci-setup
 
 # Default target
 help:
 	@echo "Available commands:"
-	@echo "  make install     - Install dependencies"
-	@echo "  make setup       - Set up development environment"
-	@echo "  make test        - Run quick tests"
-	@echo "  make test-full   - Run comprehensive test suite"
-	@echo "  make lint        - Run code linting"
-	@echo "  make format      - Format code"
-	@echo "  make clean       - Clean up temporary files"
-	@echo "  make run         - Run the bot (requires .env file)"
+	@echo "  make install      - Install dependencies"
+	@echo "  make install-dev  - Install development dependencies"
+	@echo "  make setup        - Set up development environment"
+	@echo "  make pre-commit   - Set up pre-commit hooks"
+	@echo "  make ci-setup     - Set up CI/CD and branch protection"
+	@echo "  make test         - Run quick tests"
+	@echo "  make test-full    - Run comprehensive test suite"
+	@echo "  make lint         - Run code linting"
+	@echo "  make format       - Format code"
+	@echo "  make clean        - Clean up temporary files"
+	@echo "  make run          - Run the bot (requires .env file)"
 
 # Install dependencies
 install:
 	pip install -r requirements.txt
-	pip install flake8 black isort bandit safety  # Development tools
+
+# Install development dependencies
+install-dev:
+	pip install -r requirements-dev.txt
 
 # Set up development environment
-setup: install
+setup: install-dev pre-commit
 	@echo "Setting up development environment..."
 	@echo "1. Create a .env file with your DISCORD_TOKEN"
 	@echo "2. Run 'make test' to verify everything works"
 	@echo "3. Run 'make run' to start the bot"
+	@echo "4. Pre-commit hooks are now installed"
+
+# Set up pre-commit hooks
+pre-commit:
+	@echo "Installing pre-commit hooks..."
+	pre-commit install
+	@echo "✅ Pre-commit hooks installed"
+
+# Set up CI/CD and branch protection
+ci-setup:
+	@echo "🔧 Setting up CI/CD and branch protection..."
+	@echo ""
+	@echo "📋 GitHub Actions workflow is already configured in .github/workflows/test.yml"
+	@echo ""
+	@echo "🛡️ To set up branch protection, choose one option:"
+	@echo ""
+	@echo "Option 1 - Using GitHub CLI:"
+	@echo "  gh auth login"
+	@echo "  gh api repos/gercamjr/f1-scuderia-picker-discord-bot/branches/main/protection \\"
+	@echo "    --method PUT \\"
+	@echo "    --field required_status_checks='{\"strict\":true,\"contexts\":[\"All Checks Passed ✅\"]}' \\"
+	@echo "    --field enforce_admins=true \\"
+	@echo "    --field required_pull_request_reviews='{\"required_approving_review_count\":0,\"dismiss_stale_reviews\":true}' \\"
+	@echo "    --field restrictions=null"
+	@echo ""
+	@echo "Option 2 - Manual setup:"
+	@echo "  1. Go to GitHub repository settings"
+	@echo "  2. Click 'Branches' → 'Add rule'"
+	@echo "  3. Set branch name: main"
+	@echo "  4. Enable: 'Require status checks to pass before merging'"
+	@echo "  5. Select: 'All Checks Passed ✅' as required status check"
+	@echo "  6. Save changes"
+	@echo ""
+	@echo "📖 See BRANCH_PROTECTION.md for detailed instructions"
 
 # Run quick tests
 test:

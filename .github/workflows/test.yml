@@ -1,26 +1,98 @@
-name: Run Tests
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Ensure only one workflow runs at a time per PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  # Quick syntax and import validation (fast fail)
+  validate:
+    name: Validate Code
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate Python syntax
+        run: |
+          echo "🔍 Checking Python syntax..."
+          python -m py_compile bot.py
+          python -m py_compile seed_database.py
+          python -m py_compile test_bot.py
+          python -m py_compile run_tests.py
+
+      - name: Test imports
+        run: |
+          echo "📦 Testing imports..."
+          python -c "
+          try:
+              import discord
+              from discord.ext import commands
+              from discord import app_commands, ui, Interaction
+              import requests
+              import aiohttp
+              from dotenv import load_dotenv
+              import sqlite3
+              import asyncio
+              print('✅ All imports successful')
+          except ImportError as e:
+              print(f'❌ Import failed: {e}')
+              exit(1)
+          "
+
+  # Comprehensive testing across Python versions
+  test:
+    name: Test Suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: validate
 
     strategy:
+      fail-fast: false # Continue testing other versions even if one fails
       matrix:
-        python-version: [3.9, 3.10, 3.11, 3.12]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
       - name: Install dependencies
         run: |
@@ -29,106 +101,288 @@ jobs:
 
       - name: Run quick tests
         run: |
+          echo "🏃‍♂️ Running quick tests..."
           python run_tests.py
 
       - name: Run comprehensive test suite
         run: |
+          echo "🧪 Running comprehensive test suite..."
           python test_bot.py
 
-      - name: Test bot syntax
+      - name: Test database initialization
         run: |
-          python -m py_compile bot.py
-          python -m py_compile seed_database.py
-
-      - name: Check for common issues
-        run: |
-          # Check for hardcoded tokens (should use environment variables)
-          if grep -r "bot\.run(" *.py | grep -v "TOKEN"; then
-            echo "Warning: Found potential hardcoded tokens"
-            exit 1
-          fi
-
-          # Verify database initialization
+          echo "🗄️ Testing database initialization..."
           python -c "
           import sqlite3
           import tempfile
           import os
-
-          # Test database creation
-          test_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
-          test_db.close()
-
-          # Import and test init function
           import sys
           sys.path.append('.')
 
-          # Mock the database file path
-          import bot
-          original_db = bot.DB_FILE
-          bot.DB_FILE = test_db.name
+          # Test database creation with proper cleanup
+          test_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+          test_db.close()
 
           try:
+              import bot
+              original_db = bot.DB_FILE
+              bot.DB_FILE = test_db.name
+              
               bot.init_database()
               print('✅ Database initialization test passed')
+              
+              # Verify table was created
+              conn = sqlite3.connect(test_db.name)
+              cursor = conn.cursor()
+              cursor.execute(\"SELECT name FROM sqlite_master WHERE type='table' AND name='user_picks'\")
+              if cursor.fetchone():
+                  print('✅ Database table created successfully')
+              else:
+                  print('❌ Database table not found')
+                  exit(1)
+              conn.close()
+              
           except Exception as e:
               print(f'❌ Database initialization failed: {e}')
               exit(1)
           finally:
-              bot.DB_FILE = original_db
-              os.unlink(test_db.name)
+              if 'bot' in locals():
+                  bot.DB_FILE = original_db
+              if os.path.exists(test_db.name):
+                  os.unlink(test_db.name)
           "
 
+      - name: Security scan for hardcoded secrets
+        run: |
+          echo "🔐 Scanning for hardcoded secrets..."
+          # Check for hardcoded tokens (should use environment variables)
+          if grep -rn "bot\.run(" *.py | grep -v "TOKEN" | grep -v "os\.getenv"; then
+            echo "❌ Found potential hardcoded tokens in bot.run() calls"
+            echo "Please use environment variables: bot.run(os.getenv('DISCORD_TOKEN'))"
+            exit 1
+          fi
+
+          # Check for other potential secrets
+          if grep -rn -E "(password|secret|key)\s*=\s*['\"][^'\"]*['\"]" *.py --exclude-dir=__pycache__ || true; then
+            echo "⚠️  Found potential hardcoded secrets. Please review and use environment variables."
+          fi
+
+          echo "✅ Security scan completed"
+
+  # Security and code quality checks
   security:
+    name: Security & Quality
     runs-on: ubuntu-latest
+    needs: validate
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install security tools
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-security-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-security-
+
+      - name: Install security and linting tools
         run: |
           python -m pip install --upgrade pip
-          pip install bandit safety
+          pip install bandit safety flake8 black isort
           pip install -r requirements.txt
 
-      - name: Run security scan with bandit
+      - name: Run security scan with Bandit
         run: |
-          bandit -r . -f json -o bandit-report.json || true
-          bandit -r . || true
+          echo "🛡️ Running security scan..."
+          bandit -r . -f json -o bandit-report.json
+          bandit -r . --severity-level medium
 
       - name: Check for known vulnerabilities
         run: |
-          safety check || true
+          echo "🔍 Checking for known vulnerabilities..."
+          safety check --json || safety check
 
-  lint:
+      - name: Run code linting
+        run: |
+          echo "📝 Running code linting..."
+          # Critical errors that should fail the build
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --max-line-length=127
+
+          # Style warnings (non-blocking but reported)
+          echo "📊 Style check results:"
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Check import sorting
+        run: |
+          echo "📚 Checking import sorting..."
+          isort --check-only --diff . || {
+            echo "❌ Import sorting issues found. Run 'make format' locally to fix."
+            exit 1
+          }
+
+      - name: Check code formatting
+        run: |
+          echo "🎨 Checking code formatting..."
+          black --check --diff . || {
+            echo "❌ Code formatting issues found. Run 'make format' locally to fix."
+            exit 1
+          }
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-report
+          path: bandit-report.json
+
+  # Integration test with actual bot functionality
+  integration:
+    name: Integration Tests
     runs-on: ubuntu-latest
+    needs: [validate, test]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Install linting tools
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-integration-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 black isort
+          pip install -r requirements.txt
 
-      - name: Run flake8
+      - name: Run local CI pipeline equivalent
         run: |
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics || true
+          echo "🔄 Running equivalent of 'make ci' locally..."
 
-      - name: Check import sorting
-        run: |
-          isort --check-only --diff . || true
+          # Syntax check
+          echo "1️⃣ Syntax validation..."
+          python -m py_compile bot.py
+          python -m py_compile seed_database.py
+          python -m py_compile test_bot.py
+          python -m py_compile run_tests.py
 
-      - name: Check code formatting
+          # Quick tests
+          echo "2️⃣ Quick tests..."
+          python run_tests.py
+
+          # Comprehensive tests  
+          echo "3️⃣ Comprehensive tests..."
+          python test_bot.py
+
+          echo "✅ All local CI pipeline checks passed!"
+
+      - name: Test unique driver constraint end-to-end
         run: |
-          black --check --diff . || true
+          echo "🏎️ Testing unique driver constraint end-to-end..."
+          python -c "
+          import sys
+          sys.path.append('.')
+          import tempfile
+          import os
+
+          # Create test database
+          test_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+          test_db.close()
+
+          try:
+              import bot
+              original_db = bot.DB_FILE
+              bot.DB_FILE = test_db.name
+              
+              # Initialize database
+              bot.init_database()
+              
+              # Test unique constraint
+              result1 = bot.save_user_pick(1, 'user1', 'Red Bull Racing', 'Max Verstappen')
+              result2 = bot.save_user_pick(2, 'user2', 'Red Bull Racing', 'Max Verstappen')
+              result3 = bot.save_user_pick(2, 'user2', 'Ferrari', 'Charles Leclerc')
+              
+              assert result1 == True, 'First user should be able to select Max Verstappen'
+              assert result2 == False, 'Second user should NOT be able to select Max Verstappen'  
+              assert result3 == True, 'Second user should be able to select different driver'
+              
+              # Verify selected drivers
+              selected = bot.get_selected_drivers()
+              assert 'Max Verstappen' in selected, 'Max Verstappen should be in selected drivers'
+              assert 'Charles Leclerc' in selected, 'Charles Leclerc should be in selected drivers'
+              assert len(selected) == 2, 'Should have exactly 2 selected drivers'
+              
+              print('✅ Unique driver constraint working correctly!')
+              
+          except Exception as e:
+              print(f'❌ Integration test failed: {e}')
+              import traceback
+              traceback.print_exc()
+              exit(1)
+          finally:
+              if 'bot' in locals():
+                  bot.DB_FILE = original_db
+              if os.path.exists(test_db.name):
+                  os.unlink(test_db.name)
+          "
+
+  # Final gate - all jobs must pass for merge to proceed
+  all-checks:
+    name: All Checks Passed ✅
+    runs-on: ubuntu-latest
+    needs: [validate, test, security, integration]
+    if: always()
+
+    steps:
+      - name: Check all job results
+        run: |
+          echo "🔍 Checking all job results..."
+
+          # Check if any required job failed
+          if [[ "${{ needs.validate.result }}" != "success" ]]; then
+            echo "❌ Validation failed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "❌ Tests failed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.security.result }}" != "success" ]]; then
+            echo "❌ Security checks failed"  
+            exit 1
+          fi
+
+          if [[ "${{ needs.integration.result }}" != "success" ]]; then
+            echo "❌ Integration tests failed"
+            exit 1
+          fi
+
+          echo "✅ All checks passed! Ready for merge 🚀"
+
+      - name: Create status check
+        run: |
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ CI/CD Pipeline completed successfully"
+          echo "📊 Summary:"
+          echo "  - Code validation: ✅ Passed"
+          echo "  - Test suite: ✅ Passed across Python 3.9-3.12"
+          echo "  - Security scan: ✅ Passed"
+          echo "  - Integration tests: ✅ Passed"
+          echo "  - Unique driver constraint: ✅ Verified"
+          echo ""
+          echo "🎯 This pull request is ready to merge!"

@@ -11,5 +11,18 @@ aiohttp==3.12.15
 # Environment Variables
 python-dotenv==1.1.1
 
-# Testing (development)
-unittest2; python_version < '3.0'
+# Development Dependencies (for CI/CD)
+# Install these for local development: pip install -r requirements-dev.txt
+# Or uncomment below for CI/CD environments:
+
+# Testing
+# unittest2; python_version < '3.0'
+
+# Security and Quality Tools
+# bandit>=1.7.0
+# safety>=2.0.0
+
+# Code Formatting and Linting  
+# flake8>=4.0.0
+# black>=22.0.0
+# isort>=5.10.0
