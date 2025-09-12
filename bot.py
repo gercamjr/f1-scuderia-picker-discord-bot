@@ -186,7 +186,7 @@ async def fetch_f1_data():
                     teams_dict[team_name] = {"name": team_name, "drivers": set()}
                 # Use a set to automatically prevent duplicates
                 teams_dict[team_name]["drivers"].add(driver_full_name)
-        
+
         # Convert sets back to sorted lists for consistency
         for team in teams_dict.values():
             team["drivers"] = sorted(list(team["drivers"]))
