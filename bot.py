@@ -173,7 +173,7 @@ async def fetch_f1_data():
                     print("No driver data found for the latest meeting.")
                     raise Exception("No drivers data found")
 
-        # Process the data to group drivers by team
+        # Process the data to group drivers by team (ensuring no duplicates)
         teams_dict = {}
         for driver in drivers_data:
             team_name = driver.get("team_name")
@@ -183,8 +183,13 @@ async def fetch_f1_data():
 
             if team_name and driver_full_name:
                 if team_name not in teams_dict:
-                    teams_dict[team_name] = {"name": team_name, "drivers": []}
-                teams_dict[team_name]["drivers"].append(driver_full_name)
+                    teams_dict[team_name] = {"name": team_name, "drivers": set()}
+                # Use a set to automatically prevent duplicates
+                teams_dict[team_name]["drivers"].add(driver_full_name)
+        
+        # Convert sets back to sorted lists for consistency
+        for team in teams_dict.values():
+            team["drivers"] = sorted(list(team["drivers"]))
 
         # Convert the dictionary back to a list
         F1_TEAMS = list(teams_dict.values())
