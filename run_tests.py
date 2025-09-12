@@ -81,17 +81,20 @@ def test_database_operations():
         # Test 1: First user selects driver
         result1 = save_user_pick(1, 'user1', 'Red Bull Racing', 'Max Verstappen')
         print(f"  ✅ First user selecting Max Verstappen: {result1}")
-        assert result1 == True, "First user should be able to select driver"
+        if result1 != True:
+            raise AssertionError("First user should be able to select driver")
         
         # Test 2: Second user tries same driver
         result2 = save_user_pick(2, 'user2', 'Red Bull Racing', 'Max Verstappen')
         print(f"  ✅ Second user selecting Max Verstappen: {result2}")
-        assert result2 == False, "Second user should NOT be able to select same driver"
+        if result2 != False:
+            raise AssertionError("Second user should NOT be able to select same driver")
         
         # Test 3: Second user selects different driver
         result3 = save_user_pick(2, 'user2', 'Mercedes', 'Lewis Hamilton')
         print(f"  ✅ Second user selecting Lewis Hamilton: {result3}")
-        assert result3 == True, "Second user should be able to select different driver"
+        if result3 != True:
+            raise AssertionError("Second user should be able to select different driver")
         
         # Test 4: Get selected drivers
         conn = sqlite3.connect(test_db_path)
@@ -103,7 +106,8 @@ def test_database_operations():
         
         expected = {'Max Verstappen', 'Lewis Hamilton'}
         print(f"  ✅ Selected drivers: {selected_drivers}")
-        assert selected_drivers == expected, f"Selected drivers should be {expected}"
+        if selected_drivers != expected:
+            raise AssertionError(f"Selected drivers should be {expected}")
         
         print("✅ Database operations test passed")
         return True
@@ -140,22 +144,26 @@ def test_driver_filtering_logic():
                 })
         
         print(f"  ✅ Teams with available drivers: {len(available_teams)}")
-        assert len(available_teams) == 3, "All teams should have available drivers"
+        if len(available_teams) != 3:
+            raise AssertionError("All teams should have available drivers")
         
         # Test driver filtering for specific team
         red_bull_drivers = ['Max Verstappen', 'Sergio Perez']
         available_red_bull = [d for d in red_bull_drivers if d not in selected_drivers]
         
         print(f"  ✅ Available Red Bull drivers: {available_red_bull}")
-        assert available_red_bull == ['Sergio Perez'], "Only Sergio Perez should be available"
+        if available_red_bull != ['Sergio Perez']:
+            raise AssertionError("Only Sergio Perez should be available")
         
         # Test total count calculation
         total_drivers = sum(len(team['drivers']) for team in f1_teams)
         available_count = total_drivers - len(selected_drivers)
         
         print(f"  ✅ Total drivers: {total_drivers}, Available: {available_count}")
-        assert total_drivers == 6, "Should have 6 total drivers"
-        assert available_count == 4, "Should have 4 available drivers"
+        if total_drivers != 6:
+            raise AssertionError("Should have 6 total drivers")
+        if available_count != 4:
+            raise AssertionError("Should have 4 available drivers")
         
         print("✅ Driver filtering logic test passed")
         return True
@@ -173,21 +181,24 @@ def test_edge_cases():
         selected_drivers = set()
         team_drivers = []
         available = [d for d in team_drivers if d not in selected_drivers]
-        assert len(available) == 0, "Empty team should have no available drivers"
+        if len(available) != 0:
+            raise AssertionError("Empty team should have no available drivers")
         print("  ✅ Empty driver list handled correctly")
         
         # Test all drivers selected
         all_drivers = ['Driver1', 'Driver2', 'Driver3']
         selected_drivers = set(all_drivers)
         available = [d for d in all_drivers if d not in selected_drivers]
-        assert len(available) == 0, "No drivers should be available when all selected"
+        if len(available) != 0:
+            raise AssertionError("No drivers should be available when all selected")
         print("  ✅ All drivers selected scenario handled correctly")
         
         # Test case sensitivity (drivers should be exact match)
         selected_drivers = {'max verstappen'}  # lowercase
         team_drivers = ['Max Verstappen']  # proper case
         available = [d for d in team_drivers if d not in selected_drivers]
-        assert len(available) == 1, "Case sensitivity should matter"
+        if len(available) != 1:
+            raise AssertionError("Case sensitivity should matter")
         print("  ✅ Case sensitivity handled correctly")
         
         print("✅ Edge cases test passed")
@@ -256,7 +267,9 @@ def main():
                 else:
                     print("\n❌ Some comprehensive tests failed")
                     return 1
-        except:
+        except (KeyboardInterrupt, EOFError):
+            # Handle user interruption gracefully
+            print("\n⚠️  Test interrupted by user")
             pass
         
         return 0
