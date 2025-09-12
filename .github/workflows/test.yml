@@ -1,0 +1,134 @@
+name: Run Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11, 3.12]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run quick tests
+        run: |
+          python run_tests.py
+
+      - name: Run comprehensive test suite
+        run: |
+          python test_bot.py
+
+      - name: Test bot syntax
+        run: |
+          python -m py_compile bot.py
+          python -m py_compile seed_database.py
+
+      - name: Check for common issues
+        run: |
+          # Check for hardcoded tokens (should use environment variables)
+          if grep -r "bot\.run(" *.py | grep -v "TOKEN"; then
+            echo "Warning: Found potential hardcoded tokens"
+            exit 1
+          fi
+
+          # Verify database initialization
+          python -c "
+          import sqlite3
+          import tempfile
+          import os
+
+          # Test database creation
+          test_db = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+          test_db.close()
+
+          # Import and test init function
+          import sys
+          sys.path.append('.')
+
+          # Mock the database file path
+          import bot
+          original_db = bot.DB_FILE
+          bot.DB_FILE = test_db.name
+
+          try:
+              bot.init_database()
+              print('✅ Database initialization test passed')
+          except Exception as e:
+              print(f'❌ Database initialization failed: {e}')
+              exit(1)
+          finally:
+              bot.DB_FILE = original_db
+              os.unlink(test_db.name)
+          "
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+          pip install -r requirements.txt
+
+      - name: Run security scan with bandit
+        run: |
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . || true
+
+      - name: Check for known vulnerabilities
+        run: |
+          safety check || true
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort
+
+      - name: Run flake8
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics || true
+
+      - name: Check import sorting
+        run: |
+          isort --check-only --diff . || true
+
+      - name: Check code formatting
+        run: |
+          black --check --diff . || true

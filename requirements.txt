@@ -1,0 +1,15 @@
+# F1 Scuderia Picker Bot Dependencies
+# Install with: pip install -r requirements.txt
+
+# Discord Bot Framework
+discord.py==2.5.2
+
+# HTTP Requests
+requests==2.32.4
+aiohttp==3.12.15
+
+# Environment Variables
+python-dotenv==1.1.1
+
+# Testing (development)
+unittest2; python_version < '3.0'
