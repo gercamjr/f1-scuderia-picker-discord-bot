@@ -471,5 +471,10 @@ async def available_drivers(interaction: Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# Run the bot
-bot.run(TOKEN)
+# Run the bot only if this script is executed directly
+if __name__ == '__main__':
+    if not TOKEN:  # This handles both None and empty string
+        print("❌ Error: DISCORD_TOKEN environment variable not set")
+        print("Please set the DISCORD_TOKEN in your .env file or environment variables")
+        exit(1)
+    bot.run(TOKEN)
